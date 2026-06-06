@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "DocuSense",
+  "version": "0.1.0",
+  "description": "Transform inaccessible PDFs into screen reader friendly pages.",
+  "action": {
+    "default_title": "DocuSense",
+    "default_popup": "index.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": ["activeTab", "tabs", "scripting", "storage"],
+  "host_permissions": ["http://localhost:8000/*", "https://*/*", "http://*/*", "file:///*"]
+}

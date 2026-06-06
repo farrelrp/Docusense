@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+python-multipart
+pydantic
+pydantic-settings
+httpx
+pypdf
+google-genai
+beautifulsoup4
+bleach
+python-dotenv

@@ -1,0 +1,381 @@
+:root {
+  --docusense-blue: #123c7c;
+  --docusense-light-blue: #2ea7e0;
+  --docusense-bg: #f7faff;
+  --docusense-text: #172033;
+  --docusense-border: #d8e6f7;
+  --docusense-error: #a12828;
+  --docusense-success: #17643a;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--docusense-text);
+  background: var(--docusense-bg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  width: 390px;
+  min-height: 560px;
+  margin: 0;
+  background: var(--docusense-bg);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+.chapter-content:focus-visible {
+  outline: 3px solid var(--docusense-light-blue);
+  outline-offset: 2px;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 560px;
+  padding: 18px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 8px;
+  background: var(--docusense-blue);
+  color: #fff;
+  font-weight: 800;
+}
+
+.header h1 {
+  margin: 0;
+  color: var(--docusense-blue);
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.header p,
+.result-heading-row p {
+  margin: 4px 0 0;
+  color: #43516a;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.panel,
+.status {
+  border: 1px solid var(--docusense-border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 14px;
+}
+
+.panel h2 {
+  margin: 0 0 12px;
+  color: var(--docusense-blue);
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.current-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.label,
+.status-label {
+  margin: 0;
+  color: var(--docusense-blue);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.tab-title,
+.tab-url,
+.tab-status,
+.status p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.tab-title {
+  font-weight: 700;
+}
+
+.tab-url {
+  overflow-wrap: anywhere;
+  color: #43516a;
+}
+
+.tab-status {
+  color: var(--docusense-success);
+  font-weight: 700;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0;
+  color: #5d6b82;
+  font-size: 12px;
+}
+
+.divider::before,
+.divider::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: var(--docusense-border);
+}
+
+.primary-button,
+.secondary-button,
+.file-control {
+  min-height: 42px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-weight: 700;
+  text-align: center;
+}
+
+.primary-button {
+  background: var(--docusense-blue);
+  color: #fff;
+}
+
+.primary-button:hover:not(:disabled) {
+  background: #0c2d62;
+}
+
+.secondary-button {
+  background: #fff;
+  color: var(--docusense-blue);
+  border-color: var(--docusense-border);
+}
+
+.primary-button:disabled,
+.file-control:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.compact {
+  min-height: 36px;
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+
+.file-control {
+  display: block;
+  border-color: var(--docusense-blue);
+  color: var(--docusense-blue);
+  background: #eef6ff;
+}
+
+.file-control input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+.status {
+  background: #fdfefe;
+}
+
+.status-processing,
+.status-uploading,
+.status-checking {
+  border-color: var(--docusense-light-blue);
+}
+
+.status-completed {
+  border-color: #79c59a;
+}
+
+.status-error {
+  border-color: #e4a3a3;
+}
+
+.error-text {
+  color: var(--docusense-error);
+  font-weight: 700;
+}
+
+.result-heading-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.result-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cache-note {
+  margin: 0 0 12px;
+  border: 1px solid #79c59a;
+  border-radius: 8px;
+  padding: 10px;
+  color: var(--docusense-success);
+  background: #f1fbf5;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.reader-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  border: 1px solid var(--docusense-border);
+  border-radius: 8px;
+  padding: 10px;
+  background: #fbfdff;
+}
+
+.reader-controls p {
+  min-width: 0;
+  margin: 0;
+  color: #43516a;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.reader-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chapter-list {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.chapter-list button {
+  flex: 0 0 auto;
+  max-width: 210px;
+  min-height: 34px;
+  border: 1px solid var(--docusense-border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  overflow: hidden;
+  background: #fff;
+  color: var(--docusense-blue);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chapter-list button.active {
+  border-color: var(--docusense-blue);
+  background: #eef6ff;
+}
+
+.chapter-content {
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--docusense-border);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfdff;
+}
+
+.chapter-content :where(h1, h2, h3, h4) {
+  color: var(--docusense-blue);
+  line-height: 1.25;
+}
+
+.chapter-content h1 {
+  font-size: 20px;
+}
+
+.chapter-content h2 {
+  font-size: 17px;
+}
+
+.chapter-content p,
+.chapter-content li,
+.chapter-content td,
+.chapter-content th {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.chapter-content table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.chapter-content th,
+.chapter-content td {
+  border: 1px solid var(--docusense-border);
+  padding: 6px;
+  vertical-align: top;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(10, 20, 38, 0.48);
+}
+
+.warning-modal {
+  width: min(100%, 350px);
+  border-radius: 8px;
+  border: 1px solid var(--docusense-border);
+  background: #fff;
+  padding: 18px;
+  box-shadow: 0 18px 36px rgba(18, 60, 124, 0.18);
+}
+
+.warning-modal h2 {
+  margin: 0 0 10px;
+  color: var(--docusense-blue);
+  font-size: 18px;
+}
+
+.warning-modal p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}

@@ -6,7 +6,7 @@ DocuSense is a Microsoft Edge extension that helps visually impaired students re
 
 This prototype intentionally avoids Azure implementation for now because no Azure credits are available. The code should still be structured so the Gemini processor can later be replaced by an Azure based processor using Azure AI Document Intelligence, Azure AI Vision, and Azure OpenAI.
 
-The original DocuSense concept focuses on transforming inaccessible PDFs into screen reader ready documents by fixing reading order, explaining visual content, and producing a guided reading script. This prototype keeps the same user value but implements it with a simpler Gemini based architecture.
+The original DocuSense concept focuses on transforming inaccessible PDFs into screen reader ready documents by fixing reading order, cleaning cover and front matter, and explaining visual content alongside the paper's written content. DocuSense is not a paper summarizer. The main success metric is whether a screen reader can follow the paper in the intended order.
 
 ## 2. Goals
 
@@ -15,11 +15,13 @@ The original DocuSense concept focuses on transforming inaccessible PDFs into sc
 3. Preserve the original document language, including English and Indonesian.
 4. Convert research papers into semantic accessible HTML.
 5. Mirror the paper section by section.
-6. Include an introductory document summary containing title, authors, publisher or venue when available, and source language.
+6. Include cleaned front matter containing title, authors, publisher or venue when available, and source language.
 7. Warn users when a PDF is longer than 50 pages but still allow them to continue.
 8. Keep the backend provider independent so Gemini can later be replaced with Azure services.
 9. Do not require user sign in.
 10. Use DocuSense blue and white branding in the extension UI.
+11. Preserve near full written content for substantive paper sections where it matters.
+12. Clearly label DocuSense-added accessibility explanations so they are not confused with original paper text.
 
 ## 3. Non Goals
 
@@ -31,6 +33,7 @@ The original DocuSense concept focuses on transforming inaccessible PDFs into sc
 6. Do not guarantee perfect figure interpretation.
 7. Do not implement Azure yet.
 8. Do not support every possible PDF type. The first target is research papers.
+9. Do not summarize the paper as the primary output.
 
 ## 4. Target User Flow
 
@@ -70,6 +73,8 @@ The original DocuSense concept focuses on transforming inaccessible PDFs into sc
 
 The final output must be full semantic HTML because it works well with browser based reading tools and screen readers. The extension should show a preview, but the primary reading experience should be a full page HTML result because Edge Read Aloud and external screen readers work better on a full document page than inside a small extension panel.
 
+The output should preserve the paper's substantive written content, not condense the paper into a summary. DocuSense-added material must be clearly labeled, especially diagram, figure, chart, and important table explanations.
+
 The generated HTML must use semantic elements only where possible:
 
 ```html
@@ -93,6 +98,16 @@ The generated HTML must use semantic elements only where possible:
     <section id="abstract">
       <h2>Abstract</h2>
       <p>...</p>
+    </section>
+
+    <section id="figure-2-explanation">
+      <h2>DocuSense figure explanation: Figure 2</h2>
+      <p>...</p>
+    </section>
+
+    <section id="references-available">
+      <h2>References available</h2>
+      <p>The source paper contains references.</p>
     </section>
   </article>
 </main>
@@ -246,7 +261,7 @@ Behavior:
 2. Save file temporarily.
 3. Count pages using `pypdf`.
 4. If pages are above `MAX_RECOMMENDED_PAGES` and `force` is false, return a warning response.
-5. If acceptable or forced, process the PDF through Gemini.
+5. If acceptable or forced, process the PDF through the document processor.
 6. Return job id, status, page count, warning if any, and result URL.
 
 Warning response:
@@ -356,6 +371,17 @@ class AzureDocumentProcessor(DocumentProcessor):
 
 The rest of the backend must call `DocumentProcessor`, not Gemini directly.
 
+The processing architecture should move toward explicit stages:
+
+1. Document intake and validation.
+2. Layout and reading-order analysis.
+3. Cover and front-matter cleanup.
+4. Figure, diagram, chart, and important table explanation.
+5. HTML assembly with original written content and clearly labeled DocuSense additions.
+6. Sanitization and result storage.
+
+The current Gemini prototype may implement stages 2 through 5 inside a single model call, but the prompt and processor metadata should describe the staged intent so the implementation can later be split into specialized processors.
+
 ### 7.5 Gemini Processing Requirements
 
 The Gemini processor must:
@@ -364,13 +390,14 @@ The Gemini processor must:
 2. Use model `gemini-2.5-flash` by default.
 3. Prompt the model to return valid semantic HTML only.
 4. Preserve the original language.
-5. Mirror the research paper section by section.
-6. Extract title, authors, publisher or venue where available.
-7. Reconstruct the intended reading order.
-8. Explain figures, graphs, tables, and diagrams in context.
-9. Remove repeated headers, footers, page numbers, and irrelevant metadata.
-10. Keep references at the end.
-11. Avoid unsupported scripts, inline event handlers, external CSS, and external JavaScript.
+5. Preserve substantive written content rather than summarizing it.
+6. Mirror the research paper section by section.
+7. Extract and clean title, authors, publisher or venue where available.
+8. Reconstruct the intended reading order.
+9. Add clearly labeled DocuSense explanation sections for figures, graphs, important tables, and diagrams.
+10. Remove repeated headers, footers, page numbers, and irrelevant metadata.
+11. Replace the full reference list with a final "References available" section.
+12. Avoid unsupported scripts, inline event handlers, external CSS, and external JavaScript.
 
 ### 7.6 Gemini Prompt
 
@@ -379,25 +406,29 @@ Create `backend/app/prompts/accessible_html_prompt.txt`:
 ```text
 You are DocuSense, an accessibility assistant for visually impaired students.
 
-Convert the attached research paper PDF into screen reader friendly semantic HTML.
+Transform the attached research paper PDF into screen reader friendly semantic HTML.
 
 The output will be opened in Microsoft Edge and read using Edge Read Aloud or a screen reader.
 
+DocuSense is not a summarizer. Your primary goal is to repair the reading experience so a screen reader can follow the paper in the intended order.
+
 Requirements:
 1. Preserve the original language of the document. If the document is in Indonesian, write the result in Indonesian. If the document is in English, write the result in English.
-2. Reconstruct the correct reading order, especially for multi column academic papers.
-3. Mirror the paper section by section. Follow the original academic structure when possible, such as Abstract, Introduction, Methods, Results, Discussion, Conclusion, Acknowledgments, References, and Appendices.
-4. Begin with an accessible introduction section containing document title, authors, publisher or venue if available, detected language, and a short note that this is a DocuSense accessible version.
-5. Use only semantic HTML elements: html, head, title, meta, body, main, article, header, nav, section, h1, h2, h3, h4, p, ul, ol, li, table, thead, tbody, tr, th, td, figure, figcaption, blockquote, strong, em, sup, sub, code.
+2. Preserve the paper's written content where it matters: abstract, main sections, methods, results, discussion, conclusion, captions, meaningful table text, and other substantive academic content. Do not replace these sections with summaries.
+3. Clean up the cover and front matter so it is streamlined for reading. Keep title, authors, publisher or venue if available, detected language, and other useful metadata, but remove visual clutter, repeated logos, page chrome, and layout noise.
+4. Reconstruct the correct reading order, especially for multi column academic papers.
+5. Mirror the paper section by section. Follow the original academic structure when possible, such as Abstract, Introduction, Methods, Results, Discussion, Conclusion, Acknowledgments, References, and Appendices.
 6. Create a navigation section near the top with links to major sections.
-7. Explain figures, charts, diagrams, and important tables in text. Place explanations near the section where they appear.
-8. If a visual element is unclear, describe only what can be inferred from the document and do not invent details.
-9. Remove repeated headers, footers, standalone page numbers, and layout artifacts.
-10. Keep references in a separate references section at the end.
-11. Do not include Markdown fences.
-12. Do not include JavaScript.
-13. Do not include external CSS links.
-14. Return only complete valid HTML.
+7. Add DocuSense accessibility additions as clearly labeled extra sections, not as replacements for the paper text.
+8. Explain figures, charts, diagrams, and important tables in separate nearby sections. Use headings such as "DocuSense figure explanation: Figure 2" or the equivalent in the document language.
+9. If a visual element is unclear, describe only what can be inferred from the document and do not invent details.
+10. Remove repeated headers, footers, standalone page numbers, hyphenation artifacts, broken column ordering, and other layout artifacts.
+11. Do not include the full reference list. Add a final section titled "References available" or the equivalent in the document language, and briefly state that the source paper contains references.
+12. Use only semantic HTML elements: html, head, title, meta, body, main, article, header, nav, section, h1, h2, h3, h4, p, ul, ol, li, table, thead, tbody, tr, th, td, figure, figcaption, blockquote, strong, em, sup, sub, code.
+13. Do not include Markdown fences.
+14. Do not include JavaScript.
+15. Do not include external CSS links.
+16. Return only complete valid HTML.
 ```
 
 ### 7.7 HTML Sanitization
