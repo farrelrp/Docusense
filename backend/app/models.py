@@ -50,3 +50,4 @@ class ResultMetadata(BaseModel):
     stage_timings_ms: dict[str, int] = Field(default_factory=dict)
     stage_statuses: dict[str, str] = Field(default_factory=dict)
     stage_results: list[dict] = Field(default_factory=list)
+    document_information: dict = Field(default_factory=dict)

@@ -9,9 +9,6 @@ Create a concise transformation plan that will help a later stage repair reading
 
 Required JSON shape:
 {
-  "title": "string",
-  "authors": ["string"],
-  "venue_or_publisher": "string",
   "detected_language": "en or id or other BCP-47 language code",
   "front_matter_notes": ["string"],
   "section_outline": [
@@ -36,6 +33,7 @@ Required JSON shape:
 Rules:
 1. Do not summarize the paper's findings.
 2. Keep the plan short enough to be used as context in a later model call.
-3. If a value is unavailable, use an empty string or empty list.
-4. Include only substantive sections in section_outline.
-5. Use the original document language for human-readable values when possible.
+3. Do not extract title, authors, publisher, publication, or publication date. Those are provided by a separate first-page metadata stage.
+4. If a value is unavailable, use an empty string or empty list.
+5. Include only substantive sections in section_outline.
+6. Use the original document language for human-readable values when possible.

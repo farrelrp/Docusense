@@ -324,10 +324,9 @@ export default function App() {
       startedAt: Date.now(),
     });
 
+    let file: File;
     try {
-      const file = await getCurrentFile(url);
-      setSelectedSourceKey(sourceKey);
-      await runPendingAction({ type: "upload", file }, force, sourceKey);
+      file = await getCurrentFile(url);
     } catch (error) {
       await writeSession({
         ...DEFAULT_SESSION,
@@ -337,6 +336,21 @@ export default function App() {
         errorMessage: error instanceof Error
           ? `${error.message} In Edge, open edge://extensions, enable "Allow access to file URLs" for DocuSense, then try again.`
           : "DocuSense could not read the local PDF tab. Enable file URL access for the extension and try again.",
+      });
+      return;
+    }
+
+    try {
+      setSelectedSourceKey(sourceKey);
+      await runPendingAction({ type: "upload", file }, force, sourceKey);
+    } catch (error) {
+      await writeSession({
+        ...DEFAULT_SESSION,
+        sourceKey,
+        state: "error",
+        statusMessage: "Processing failed.",
+        errorMessage:
+          error instanceof Error ? error.message : "DocuSense could not start processing.",
       });
     }
   }

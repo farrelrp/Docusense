@@ -5,7 +5,7 @@ Use the attached research paper PDF and the provided document plan to prepare vi
 Return JSON only. Do not include Markdown fences. Do not include prose outside the JSON object.
 
 Goal:
-Create clearly labeled explanations for figures, charts, diagrams, and important tables. These explanations will be inserted as separate DocuSense sections near the relevant paper content.
+Create clearly labeled explanations for figures, charts, diagrams, and tables. These explanations will be inserted as separate DocuSense sections near the relevant paper content. Tables will not be reproduced in the final HTML, so each table explanation must provide enough context to understand its purpose and main findings without reading the original cells.
 
 Required JSON shape:
 {
@@ -26,3 +26,7 @@ Rules:
 3. Use the original document language when possible.
 4. Keep explanations useful for screen reader users.
 5. Do not rewrite or summarize the surrounding paper content.
+6. For every table, explain what it measures or compares, the most important values or relationships, notable trends or outliers, and the conclusion the reader should draw from it.
+7. Do not transcribe a table row by row or reproduce its grid, columns, or full cell contents.
+8. Start each explanation directly with the visual's subject, purpose, structure, or main finding. Do not identify or introduce the source document.
+9. Never mention the document title, journal or conference name, publication or publisher, authors, DOI or other identifiers, or source filename in a figure, diagram, chart, or table explanation, even when those details appear in the PDF.

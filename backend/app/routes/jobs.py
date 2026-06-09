@@ -126,7 +126,10 @@ async def _process_pdf(
         started = time.perf_counter()
         logger.info("[docusense] job=%s stage=sanitize_and_store status=started", job_id)
         try:
-            sanitized_html = sanitize_html(result["html"])
+            sanitized_html = sanitize_html(
+                result["html"],
+                document_information=result.get("document_information"),
+            )
             processing_stages = [*result.get("processing_stages", []), "sanitize_and_store"]
             stage_timings_ms = dict(result.get("stage_timings_ms", {}))
             stage_statuses = dict(result.get("stage_statuses", {}))
@@ -155,6 +158,7 @@ async def _process_pdf(
                 stage_timings_ms=stage_timings_ms,
                 stage_statuses=stage_statuses,
                 stage_results=stage_results,
+                document_information=result.get("document_information"),
             )
             if source_url:
                 metadata["source_url"] = source_url

@@ -281,7 +281,7 @@ def _link_filter(tag: str, name: str, value: str) -> bool:
     return name in ALLOWED_ATTRIBUTES.get(tag, [])
 
 
-def sanitize_html(raw_html: str) -> str:
+def sanitize_html(raw_html: str, document_information: dict | None = None) -> str:
     try:
         raw_html = remove_unsafe_elements(raw_html)
         cleaned = bleach.clean(
@@ -305,7 +305,10 @@ def sanitize_html(raw_html: str) -> str:
             status_code=500,
         )
 
-    return enhance_readable_result_page(normalize_result_page(cleaned))
+    return enhance_readable_result_page(
+        normalize_result_page(cleaned),
+        document_information=document_information,
+    )
 
 
 def remove_unsafe_elements(raw_html: str) -> str:
@@ -348,7 +351,7 @@ def normalize_result_page(html: str) -> str:
     return "<!doctype html>\n" + str(soup)
 
 
-def enhance_readable_result_page(html: str) -> str:
+def enhance_readable_result_page(html: str, document_information: dict | None = None) -> str:
     soup = BeautifulSoup(html, "html.parser")
     for item in list(soup.contents):
         if isinstance(item, Doctype):
@@ -398,7 +401,7 @@ def enhance_readable_result_page(html: str) -> str:
             article.append(child.extract())
         main.append(article)
 
-    ensure_document_information(soup)
+    ensure_document_information(soup, document_information=document_information)
 
     if soup.head.find("style", id="docuse-reader-style") is None:
         style = soup.new_tag("style", id="docuse-reader-style")
@@ -417,7 +420,10 @@ def enhance_readable_result_page(html: str) -> str:
     return "<!doctype html>\n" + str(soup)
 
 
-def ensure_document_information(soup: BeautifulSoup) -> None:
+def ensure_document_information(
+    soup: BeautifulSoup,
+    document_information: dict | None = None,
+) -> None:
     article = soup.select_one("main article") or soup.find("article")
     if article is None:
         return
@@ -429,56 +435,63 @@ def ensure_document_information(soup: BeautifulSoup) -> None:
         ):
             section.decompose()
 
-    title = extract_title(str(article)) or "Untitled document"
-    authors = extract_authors(article, title)
-    publisher = extract_publisher(article)
-
-    details = [f'This document is titled "{title}".']
-    if authors:
-        details.append(f"It was authored by {authors}.")
-    if publisher:
-        details.append(f"It was published by {publisher}.")
+    details = format_document_information(document_information or {})
+    if not details:
+        return
 
     section = soup.new_tag("section", id="document-information")
     heading = soup.new_tag("h2")
     heading.string = "Document Information"
-    paragraph = soup.new_tag("p")
-    paragraph.string = " ".join(details)
     section.append(heading)
-    section.append(paragraph)
+    for detail in details:
+        paragraph = soup.new_tag("p")
+        paragraph.string = detail
+        section.append(paragraph)
     article.insert(0, section)
 
 
-def extract_authors(article, title: str) -> str:
-    for node in article.find_all(["p", "div", "header"], recursive=True):
-        text = clean_metadata_text(node.get_text(" ", strip=True))
-        if not text or text == title or "@" in text:
-            continue
-        if re.search(r"\b(publisher|detected language|arxiv|preprint|abstract)\b", text, re.I):
-            continue
-        if "," in text and len(re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", text)) >= 2:
-            return text.rstrip(".")
-    return ""
+def format_document_information(document_information: dict) -> list[str]:
+    def clean_string(field: str) -> str:
+        value = document_information.get(field, "")
+        return clean_metadata_text(value) if isinstance(value, str) else ""
+
+    details = []
+    title = clean_string("title")
+    if is_meaningful_metadata_value(title, placeholders={"untitled document"}):
+        details.append(f"Title: {title}")
+
+    authors = document_information.get("authors", [])
+    if isinstance(authors, list):
+        cleaned_authors = [
+            clean_metadata_text(author)
+            for author in authors
+            if isinstance(author, str) and is_meaningful_metadata_value(author)
+        ]
+        if cleaned_authors:
+            details.append(f"Authors: {', '.join(cleaned_authors)}")
+
+    publisher = clean_string("publisher")
+    if is_meaningful_metadata_value(publisher):
+        details.append(f"Published by: {publisher}")
+
+    publication = clean_string("publication")
+    if is_meaningful_metadata_value(publication):
+        details.append(f"Publication: {publication}")
+
+    publication_date = clean_string("publication_date")
+    if is_meaningful_metadata_value(publication_date):
+        details.append(f"Publication date: {publication_date}")
+
+    return details
 
 
-def extract_publisher(article) -> str:
-    raw_text = article.get_text("\n", strip=True)
-    text = clean_metadata_text(raw_text)
-    publisher_match = re.search(
-        r"\bPublisher:\s*(.+?)(?:\s+Detected Language:|\s+arXiv\b|\s+Preprint:|\n|$)",
-        text,
-        re.I,
-    )
-    if publisher_match:
-        return clean_metadata_text(publisher_match.group(1)).rstrip(".")
-
-    for line in raw_text.splitlines():
-        clean_line = clean_metadata_text(line)
-        if not clean_line or "@" in clean_line:
-            continue
-        if re.search(r"\b(research|university|institute|laboratory|lab|conference|journal)\b", clean_line, re.I):
-            return clean_line.rstrip(".")
-    return ""
+def is_meaningful_metadata_value(value: str, placeholders: set[str] | None = None) -> bool:
+    cleaned = clean_metadata_text(value).strip(" .:-")
+    if not cleaned:
+        return False
+    ignored = {"unknown", "n/a", "none", "not available", "not provided"}
+    ignored.update(placeholders or set())
+    return cleaned.lower() not in ignored
 
 
 def clean_metadata_text(text: str) -> str:
@@ -512,9 +525,16 @@ def extract_metadata(
     stage_timings_ms: dict[str, int] | None = None,
     stage_statuses: dict[str, str] | None = None,
     stage_results: list[dict] | None = None,
+    document_information: dict | None = None,
 ) -> dict:
     soup = BeautifulSoup(html, "html.parser")
-    title = extract_title(html) or "Untitled document"
+    document_information = document_information or {}
+    extracted_title = document_information.get("title", "")
+    title = (
+        clean_metadata_text(extracted_title)
+        if isinstance(extracted_title, str) and extracted_title.strip()
+        else extract_title(html) or "Untitled document"
+    )
     language = (soup.find("html") or {}).get("lang", "en")
     return {
         "job_id": job_id,
@@ -529,6 +549,7 @@ def extract_metadata(
         "stage_timings_ms": stage_timings_ms or {},
         "stage_statuses": stage_statuses or {},
         "stage_results": stage_results or [],
+        "document_information": document_information,
     }
 
 

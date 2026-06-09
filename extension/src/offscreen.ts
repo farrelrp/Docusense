@@ -1,12 +1,40 @@
-import { PlayerCommand } from "./messages";
+import {
+  ProcessingResult,
+  WarningResult,
+  checkPdfUploadCache,
+  checkPdfUrlCache,
+  processPdfUpload,
+  processPdfUrl,
+} from "./api";
+import {
+  BackgroundResponse,
+  ExtensionMessage,
+  PlayerCommand,
+  ProcessingCommand,
+  SessionWriteCommand,
+  StorageGetCommand,
+  StorageSetCommand,
+} from "./messages";
 import { synthesizeWithMicrosoftReadAloud } from "./microsoftReadAloud";
 import {
   DEFAULT_PLAYER_STATE,
   PLAYER_STORAGE_KEY,
   PlayerState,
-  readPlayerState,
+  normalizePlayerState,
 } from "./playerStore";
 import { ReaderChapter } from "./readerChapters";
+import { DEFAULT_SESSION, PersistedSession } from "./sessionStore";
+
+type LastAction =
+  | {
+      type: "upload";
+      file: File;
+    }
+  | {
+      type: "url";
+      url: string;
+    }
+  | null;
 
 const PLAYER_QUEUE_STORAGE_KEY = "docusensePlayerQueue";
 
@@ -22,13 +50,17 @@ let desiredPlayback = false;
 let generation = 0;
 let queueVersion = 0;
 let lastProgressWrite = 0;
+let lastAction: LastAction = null;
+let lastSourceKey = "";
+let activeRunId = 0;
 const audioUrls = new Map<number, string>();
 const pendingAudio = new Map<number, Promise<string>>();
-const initialization = Promise.all([
-  readPlayerState(),
-  chrome.storage.local.get(PLAYER_QUEUE_STORAGE_KEY),
-]).then(([savedState, queueData]) => {
-  const savedQueue = queueData[PLAYER_QUEUE_STORAGE_KEY] as PersistedPlayerQueue | undefined;
+const initialization = readExtensionStorage([
+  PLAYER_STORAGE_KEY,
+  PLAYER_QUEUE_STORAGE_KEY,
+]).then((storageData) => {
+  const savedState = normalizePlayerState(storageData[PLAYER_STORAGE_KEY]);
+  const queueData = storageData[PLAYER_QUEUE_STORAGE_KEY] as PersistedPlayerQueue | undefined;
   state = savedState.status === "playing" || savedState.status === "loading"
     ? {
         ...savedState,
@@ -36,11 +68,227 @@ const initialization = Promise.all([
         statusMessage: "Playback is ready to resume.",
       }
     : savedState;
-  if (savedQueue?.documentId === state.documentId) {
-    chapters = savedQueue.chapters;
+  if (queueData?.documentId === state.documentId) {
+    chapters = queueData.chapters;
   }
-  return chrome.storage.local.set({ [PLAYER_STORAGE_KEY]: state });
+  return writeExtensionStorage({ [PLAYER_STORAGE_KEY]: state });
 });
+
+function isPlayerCommand(message: PlayerCommand | ProcessingCommand): message is PlayerCommand {
+  return message.type.startsWith("DOCUSENSE_PLAYER_");
+}
+
+function isWarningResult(response: ProcessingResult | WarningResult): response is WarningResult {
+  return "status" in response && response.status === "warning";
+}
+
+async function readExtensionStorage(keys: string[]): Promise<Record<string, unknown>> {
+  const command: StorageGetCommand = {
+    type: "DOCUSENSE_STORAGE_GET",
+    target: "background",
+    keys,
+  };
+  const response = await chrome.runtime.sendMessage(command) as BackgroundResponse | undefined;
+  if (!response?.ok) {
+    throw new Error(response?.error ?? "DocuSense could not read extension storage.");
+  }
+  return response.data ?? {};
+}
+
+async function writeExtensionStorage(values: Record<string, unknown>): Promise<void> {
+  const command: StorageSetCommand = {
+    type: "DOCUSENSE_STORAGE_SET",
+    target: "background",
+    values,
+  };
+  const response = await chrome.runtime.sendMessage(command) as BackgroundResponse | undefined;
+  if (!response?.ok) {
+    throw new Error(response?.error ?? "DocuSense could not update extension storage.");
+  }
+}
+
+async function writeProcessingSession(session: PersistedSession): Promise<void> {
+  const command: SessionWriteCommand = {
+    type: "DOCUSENSE_WRITE_SESSION",
+    target: "background",
+    session,
+  };
+  const response = await chrome.runtime.sendMessage(command) as BackgroundResponse | undefined;
+  if (!response?.ok) {
+    throw new Error(response?.error ?? "DocuSense could not update the processing session.");
+  }
+}
+
+async function runAction(action: LastAction, sourceKey: string, force = false): Promise<void> {
+  if (!action) {
+    await writeProcessingSession({
+      ...DEFAULT_SESSION,
+      sourceKey,
+      state: "error",
+      statusMessage: "Processing failed.",
+      errorMessage: "DocuSense does not have a saved action to continue.",
+    });
+    return;
+  }
+
+  const runId = ++activeRunId;
+  lastAction = action;
+  lastSourceKey = sourceKey;
+  await writeProcessingSession({
+    ...DEFAULT_SESSION,
+    sourceKey,
+    state: action.type === "upload" ? "uploading" : "checking",
+    statusMessage: action.type === "upload" ? "Uploading PDF..." : "Checking PDF URL...",
+    startedAt: Date.now(),
+  });
+
+  try {
+    await writeProcessingSession({
+      ...DEFAULT_SESSION,
+      sourceKey,
+      state: "processing",
+      statusMessage: "Processing with DocuSense. This may take a minute.",
+      startedAt: Date.now(),
+    });
+
+    const response =
+      action.type === "upload"
+        ? await processPdfUpload(action.file, force)
+        : await processPdfUrl(action.url, force);
+
+    if (runId !== activeRunId) {
+      return;
+    }
+
+    if (isWarningResult(response)) {
+      await writeProcessingSession({
+        ...DEFAULT_SESSION,
+        sourceKey,
+        state: "warning",
+        statusMessage: response.message,
+        warning: response,
+        startedAt: null,
+      });
+      return;
+    }
+
+    await writeProcessingSession({
+      ...DEFAULT_SESSION,
+      sourceKey,
+      state: "completed",
+      statusMessage: response.cached
+        ? `This PDF was already processed. Showing the saved document for ${response.pageCount} pages.`
+        : `Completed. Processed ${response.pageCount} pages.`,
+      result: response,
+      startedAt: null,
+    });
+  } catch (error) {
+    if (runId !== activeRunId) {
+      return;
+    }
+
+    await writeProcessingSession({
+      ...DEFAULT_SESSION,
+      sourceKey,
+      state: "error",
+      statusMessage: "Processing failed.",
+      errorMessage: error instanceof Error ? error.message : "DocuSense hit an unknown error.",
+      startedAt: null,
+    });
+  }
+}
+
+async function checkCache(action: Exclude<LastAction, null>, sourceKey: string): Promise<void> {
+  const runId = ++activeRunId;
+  await writeProcessingSession({
+    ...DEFAULT_SESSION,
+    sourceKey,
+    state: "checking",
+    statusMessage: "Checking for an existing DocuSense result...",
+    startedAt: Date.now(),
+  });
+
+  try {
+    const response =
+      action.type === "upload"
+        ? await checkPdfUploadCache(action.file)
+        : await checkPdfUrlCache(action.url);
+    if (runId !== activeRunId) {
+      return;
+    }
+
+    if (!("jobId" in response)) {
+      await writeProcessingSession({
+        ...DEFAULT_SESSION,
+        sourceKey,
+        statusMessage: "Ready to process this PDF.",
+      });
+      return;
+    }
+
+    lastAction = action;
+    lastSourceKey = sourceKey;
+    await writeProcessingSession({
+      ...DEFAULT_SESSION,
+      sourceKey,
+      state: "completed",
+      statusMessage: `This PDF was already processed. Showing the saved document for ${response.pageCount} pages.`,
+      result: response,
+    });
+  } catch (error) {
+    if (runId !== activeRunId) {
+      return;
+    }
+    await writeProcessingSession({
+      ...DEFAULT_SESSION,
+      sourceKey,
+      statusMessage: "Ready to process this PDF.",
+      errorMessage: error instanceof Error ? error.message : "",
+    });
+  }
+}
+
+function handleProcessingCommand(command: ProcessingCommand): void {
+  if (command.type === "DOCUSENSE_START_URL") {
+    void runAction(
+      { type: "url", url: command.url },
+      command.sourceKey,
+      Boolean(command.force),
+    );
+    return;
+  }
+
+  if (command.type === "DOCUSENSE_START_UPLOAD") {
+    const file = new File([new Uint8Array(command.bytes)], command.fileName, {
+      type: command.mimeType || "application/pdf",
+    });
+    void runAction({ type: "upload", file }, command.sourceKey, Boolean(command.force));
+    return;
+  }
+
+  if (command.type === "DOCUSENSE_CHECK_URL") {
+    void checkCache({ type: "url", url: command.url }, command.sourceKey);
+    return;
+  }
+
+  if (command.type === "DOCUSENSE_CHECK_UPLOAD") {
+    const file = new File([new Uint8Array(command.bytes)], command.fileName, {
+      type: command.mimeType || "application/pdf",
+    });
+    void checkCache({ type: "upload", file }, command.sourceKey);
+    return;
+  }
+
+  if (command.type === "DOCUSENSE_CONTINUE_LAST") {
+    void runAction(lastAction, lastSourceKey, true);
+    return;
+  }
+
+  lastAction = null;
+  lastSourceKey = "";
+  activeRunId += 1;
+  void writeProcessingSession(DEFAULT_SESSION);
+}
 
 async function saveState(patch: Partial<PlayerState>): Promise<void> {
   state = {
@@ -48,7 +296,7 @@ async function saveState(patch: Partial<PlayerState>): Promise<void> {
     ...patch,
     updatedAt: Date.now(),
   };
-  await chrome.storage.local.set({ [PLAYER_STORAGE_KEY]: state });
+  await writeExtensionStorage({ [PLAYER_STORAGE_KEY]: state });
 }
 
 function releaseAudioCache(): void {
@@ -222,7 +470,7 @@ async function handleCommand(command: PlayerCommand): Promise<void> {
     detachAudio();
     releaseAudioCache();
     chapters = command.chapters;
-    await chrome.storage.local.set({
+    await writeExtensionStorage({
       [PLAYER_QUEUE_STORAGE_KEY]: {
         documentId: command.documentId,
         chapters,
@@ -244,6 +492,34 @@ async function handleCommand(command: PlayerCommand): Promise<void> {
       return;
     }
     await playIndex(state.currentIndex, state.status === "paused" ? state.currentTime : 0);
+    return;
+  }
+
+  if (command.type === "DOCUSENSE_PLAYER_GENERATE") {
+    if (!chapters[state.currentIndex]) {
+      throw new Error("No readable sections were found.");
+    }
+
+    await saveState({
+      status: "loading",
+      statusMessage: `Generating ${chapters[state.currentIndex].label}...`,
+    });
+    try {
+      await synthesizeSection(state.currentIndex);
+      await saveState({
+        status: "paused",
+        statusMessage: "Read aloud is ready.",
+        currentTime: 0,
+        duration: 0,
+      });
+    } catch (error) {
+      await saveState({
+        status: "error",
+        statusMessage:
+          error instanceof Error ? error.message : "Microsoft Read Aloud is unavailable.",
+      });
+      throw error;
+    }
     return;
   }
 
@@ -329,8 +605,23 @@ async function handleCommand(command: PlayerCommand): Promise<void> {
 }
 
 chrome.runtime.onMessage.addListener(
-  (message: PlayerCommand, _sender, sendResponse: (response: { ok: boolean; error?: string }) => void) => {
+  (
+    message: ExtensionMessage,
+    _sender,
+    sendResponse: (response: { ok: boolean; error?: string }) => void,
+  ) => {
     if (message.target !== "offscreen") {
+      return false;
+    }
+
+    if (message.type === "DOCUSENSE_OFFSCREEN_PING") {
+      sendResponse({ ok: true });
+      return false;
+    }
+
+    if (!isPlayerCommand(message)) {
+      handleProcessingCommand(message);
+      sendResponse({ ok: true });
       return false;
     }
 

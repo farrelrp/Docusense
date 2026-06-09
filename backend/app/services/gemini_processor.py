@@ -6,7 +6,10 @@ import logging
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Callable
+
+from pypdf import PdfReader, PdfWriter
 
 from app.config import Settings
 from app.services.document_processor import DocumentProcessor
@@ -61,6 +64,14 @@ class GeminiDocumentProcessor(DocumentProcessor):
 
         client, uploaded_pdf = self._upload_pdf(pdf_path, job_id, stage_results)
 
+        document_information = self._run_stage(
+            "document_information",
+            job_id,
+            stage_results,
+            lambda: self._generate_document_information(client, pdf_path),
+            "GEMINI_DOCUMENT_INFORMATION_FAILED",
+        )
+
         document_plan = self._run_stage(
             "document_plan",
             job_id,
@@ -97,6 +108,7 @@ class GeminiDocumentProcessor(DocumentProcessor):
             lambda: self._generate_html(
                 client=client,
                 uploaded_pdf=uploaded_pdf,
+                document_information=document_information,
                 document_plan=document_plan,
                 visual_explanations=visual_explanations,
             ),
@@ -112,6 +124,7 @@ class GeminiDocumentProcessor(DocumentProcessor):
             "stage_timings_ms": {stage.name: stage.duration_ms for stage in stage_results},
             "stage_statuses": {stage.name: stage.status for stage in stage_results},
             "stage_results": [asdict(stage) for stage in stage_results],
+            "document_information": document_information,
         }
 
     def _run_intake(self, pdf_path: Path, job_id: str, page_count: int) -> dict:
@@ -191,10 +204,74 @@ class GeminiDocumentProcessor(DocumentProcessor):
             raise DocuSenseError(error_code, empty_message, status_code=502)
         return parsed
 
+    def _generate_document_information(self, client: Any, pdf_path: Path) -> dict[str, Any]:
+        with TemporaryDirectory(prefix="docusense-first-page-") as temp_dir:
+            first_page_path = Path(temp_dir) / "first-page.pdf"
+            try:
+                reader = PdfReader(str(pdf_path))
+                if not reader.pages:
+                    raise ValueError("PDF has no pages.")
+                writer = PdfWriter()
+                writer.add_page(reader.pages[0])
+                with first_page_path.open("wb") as first_page_file:
+                    writer.write(first_page_file)
+            except Exception as exc:
+                raise DocuSenseError(
+                    "GEMINI_DOCUMENT_INFORMATION_FAILED",
+                    "DocuSense could not prepare the first page for metadata extraction.",
+                    status_code=502,
+                ) from exc
+
+            uploaded_first_page = client.files.upload(file=str(first_page_path))
+            raw_information = self._generate_json_stage(
+                client=client,
+                uploaded_pdf=uploaded_first_page,
+                prompt_name="document_information_prompt.txt",
+                error_code="GEMINI_DOCUMENT_INFORMATION_FAILED",
+                empty_message="Gemini returned empty document information.",
+            )
+        return self._normalize_document_information(raw_information)
+
+    @staticmethod
+    def _normalize_document_information(value: dict[str, Any]) -> dict[str, Any]:
+        def clean_string(field: str) -> str:
+            raw_value = value.get(field, "")
+            if not isinstance(raw_value, str):
+                return ""
+            cleaned = " ".join(raw_value.split()).strip(" .:-")
+            if cleaned.lower() in {"", "unknown", "n/a", "none", "not available", "not provided"}:
+                return ""
+            return cleaned
+
+        raw_authors = value.get("authors", [])
+        authors = []
+        if isinstance(raw_authors, list):
+            for author in raw_authors:
+                if not isinstance(author, str):
+                    continue
+                cleaned_author = " ".join(author.split()).strip(" .,:;-")
+                if cleaned_author and cleaned_author.lower() not in {
+                    "unknown",
+                    "n/a",
+                    "none",
+                    "not available",
+                    "not provided",
+                }:
+                    authors.append(cleaned_author)
+
+        return {
+            "title": clean_string("title"),
+            "authors": authors,
+            "publisher": clean_string("publisher"),
+            "publication": clean_string("publication"),
+            "publication_date": clean_string("publication_date"),
+        }
+
     def _generate_html(
         self,
         client: Any,
         uploaded_pdf: Any,
+        document_information: dict[str, Any],
         document_plan: dict[str, Any],
         visual_explanations: dict[str, Any],
     ) -> str:
@@ -204,6 +281,7 @@ class GeminiDocumentProcessor(DocumentProcessor):
                 self._read_prompt("html_assembly_prompt.txt"),
                 self._json_context(
                     {
+                        "document_information": document_information,
                         "document_plan": document_plan,
                         "visual_explanations": visual_explanations,
                     }
