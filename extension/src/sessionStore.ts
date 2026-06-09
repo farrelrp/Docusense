@@ -1,8 +1,10 @@
 import { JobState, ProcessingResult, WarningResult } from "./api";
 
 export const SESSION_STORAGE_KEY = "docusenseSession";
+let lastUpdatedAt = Date.now();
 
 export interface PersistedSession {
+  sourceKey: string;
   state: JobState;
   statusMessage: string;
   errorMessage: string;
@@ -13,6 +15,7 @@ export interface PersistedSession {
 }
 
 export const DEFAULT_SESSION: PersistedSession = {
+  sourceKey: "",
   state: "idle",
   statusMessage: "Ready to process a PDF.",
   errorMessage: "",
@@ -45,9 +48,10 @@ export async function readSession(): Promise<PersistedSession> {
 }
 
 export async function writeSession(session: PersistedSession): Promise<void> {
+  lastUpdatedAt = Math.max(Date.now(), lastUpdatedAt + 1);
   const value = {
     ...session,
-    updatedAt: Date.now(),
+    updatedAt: lastUpdatedAt,
   };
 
   const chromeApi = globalThis.chrome;

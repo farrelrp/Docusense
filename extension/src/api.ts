@@ -26,6 +26,10 @@ export interface WarningResult {
   can_continue: boolean;
 }
 
+export interface CacheMissResult {
+  status: "not_found";
+}
+
 interface CompletedApiResponse {
   job_id: string;
   status: "completed";
@@ -42,6 +46,7 @@ interface ErrorApiResponse {
 }
 
 export type JobApiResult = ProcessingResult | WarningResult;
+export type CacheApiResult = ProcessingResult | CacheMissResult;
 
 export async function processPdfUpload(file: File, force = false): Promise<JobApiResult> {
   const formData = new FormData();
@@ -68,6 +73,27 @@ export async function processPdfUrl(url: string, force = false): Promise<JobApiR
   return parseJobResponse(response);
 }
 
+export async function checkPdfUploadCache(file: File): Promise<CacheApiResult> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch(`${API_BASE_URL}/api/jobs/cache/upload`, {
+    method: "POST",
+    body: formData,
+  });
+  return parseCacheResponse(response);
+}
+
+export async function checkPdfUrlCache(url: string): Promise<CacheApiResult> {
+  const response = await fetch(`${API_BASE_URL}/api/jobs/cache/url`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ url }),
+  });
+  return parseCacheResponse(response);
+}
+
 async function parseJobResponse(response: Response): Promise<JobApiResult> {
   const data = (await response.json()) as CompletedApiResponse | WarningResult | ErrorApiResponse;
 
@@ -87,6 +113,25 @@ async function parseJobResponse(response: Response): Promise<JobApiResult> {
     resultUrl: data.result_url,
     previewHtml: compactPreviewHtml(data.preview_html),
     cached: Boolean(data.cached),
+  };
+}
+
+async function parseCacheResponse(response: Response): Promise<CacheApiResult> {
+  const data = (await response.json()) as CompletedApiResponse | CacheMissResult | ErrorApiResponse;
+  if (!response.ok || data.status === "error") {
+    const message =
+      "message" in data ? data.message : "DocuSense could not check this PDF.";
+    throw new Error(message);
+  }
+  if (data.status === "not_found") {
+    return data;
+  }
+  return {
+    jobId: data.job_id,
+    pageCount: data.page_count,
+    resultUrl: data.result_url,
+    previewHtml: compactPreviewHtml(data.preview_html),
+    cached: true,
   };
 }
 

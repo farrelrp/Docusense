@@ -237,6 +237,23 @@ input:focus-visible,
   gap: 8px;
 }
 
+.source-button {
+  align-self: flex-end;
+  border: 0;
+  padding: 2px;
+  background: transparent;
+  color: var(--docusense-blue);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.source-button:hover {
+  color: #0c2d62;
+}
+
 .cache-note {
   margin: 0 0 12px;
   border: 1px solid #79c59a;
@@ -248,25 +265,110 @@ input:focus-visible,
   line-height: 1.4;
 }
 
-.reader-controls {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+.audio-player {
   margin-bottom: 12px;
   border: 1px solid var(--docusense-border);
   border-radius: 8px;
-  padding: 10px;
-  background: #fbfdff;
+  padding: 14px;
+  background: linear-gradient(145deg, #eef6ff, #fff);
 }
 
-.reader-controls p {
-  flex: 1 1 160px;
-  min-width: 0;
+.now-playing {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: center;
+}
+
+.now-playing span {
+  color: #5d6b82;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.now-playing strong {
+  overflow: hidden;
+  color: var(--docusense-blue);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transport-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin: 14px 0;
+}
+
+.transport-button,
+.play-button {
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.transport-button {
+  width: 38px;
+  height: 38px;
+  background: #fff;
+  color: var(--docusense-blue);
+  box-shadow: 0 2px 8px rgba(18, 60, 124, 0.14);
+}
+
+.play-button {
+  min-width: 76px;
+  height: 46px;
+  padding: 0 16px;
+  background: var(--docusense-blue);
+  color: #fff;
+}
+
+.transport-button:disabled,
+.play-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.progress-row {
+  display: grid;
+  grid-template-columns: 34px 1fr 34px;
+  align-items: center;
+  gap: 8px;
+}
+
+.progress-row span {
+  color: #5d6b82;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-row span:last-child {
+  text-align: right;
+}
+
+.progress-row input {
+  width: 100%;
+  accent-color: var(--docusense-blue);
+}
+
+.player-status {
   margin: 0;
+  padding-top: 8px;
   color: #43516a;
   font-size: 12px;
   line-height: 1.35;
+  text-align: center;
+}
+
+.player-status.status-error {
+  color: var(--docusense-error);
 }
 
 .reader-layout {

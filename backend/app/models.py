@@ -26,6 +26,10 @@ class CompletedJobResponse(BaseModel):
     cached: bool = False
 
 
+class CacheMissResponse(BaseModel):
+    status: Literal["not_found"] = "not_found"
+
+
 class ErrorResponse(BaseModel):
     status: Literal["error"] = "error"
     error_code: str

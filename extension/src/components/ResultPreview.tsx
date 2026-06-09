@@ -1,230 +1,117 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { ProcessingResult } from "../api";
-import { synthesizeWithMicrosoftReadAloud } from "../microsoftReadAloud";
+import { BackgroundResponse, PlayerCommand } from "../messages";
+import {
+  DEFAULT_PLAYER_STATE,
+  PlayerState,
+  readPlayerState,
+  subscribeToPlayerChanges,
+} from "../playerStore";
+import { parseChapters } from "../readerChapters";
 
 interface ResultPreviewProps {
   result: ProcessingResult;
   onOpenFullPage: () => void;
   onReprocess: () => void;
+  onShowPdfSource: () => void;
+  isPdfSourceVisible: boolean;
 }
 
-interface ReaderChapter {
-  id: string;
-  label: string;
-  html: string;
-  text: string;
-}
-
-function getReadableHtml(element: Element): string {
-  const clone = element.cloneNode(true) as Element;
-  clone
-    .querySelectorAll("[data-read-aloud-ui='true'], script, style, nav")
-    .forEach((node) => node.remove());
-  return clone.innerHTML.trim();
-}
-
-function getReadableText(element: Element): string {
-  const clone = element.cloneNode(true) as Element;
-  clone
-    .querySelectorAll("[data-read-aloud-ui='true'], script, style, nav")
-    .forEach((node) => node.remove());
-  return clone.textContent?.replace(/\s+/g, " ").trim() ?? "";
-}
-
-function getHeadingText(element: Element, fallback: string): string {
-  return (
-    element.querySelector(":scope > h1, :scope > h2, :scope > h3, :scope > h4")?.textContent
-      ?.replace(/\s+/g, " ")
-      .trim() || fallback
-  );
-}
-
-function parseChapters(html: string): ReaderChapter[] {
-  const documentHtml = new DOMParser().parseFromString(html, "text/html");
-  const article =
-    documentHtml.querySelector("main article") ??
-    documentHtml.querySelector("article") ??
-    documentHtml.body;
-  const chapters: ReaderChapter[] = [];
-
-  const documentInfoNodes = Array.from(article.children).filter((child) => {
-    if (child.matches("[data-read-aloud-ui='true'], nav, section, script, style")) {
-      return false;
-    }
-    return Boolean(getReadableText(child));
-  });
-
-  if (documentInfoNodes.length > 0) {
-    const htmlFragment = documentInfoNodes
-      .map((node) => {
-        const clone = node.cloneNode(true) as Element;
-        clone
-          .querySelectorAll("[data-read-aloud-ui='true'], script, style, nav")
-          .forEach((child) => child.remove());
-        return clone.outerHTML;
-      })
-      .join("");
-    const text = documentInfoNodes.map((node) => getReadableText(node)).filter(Boolean).join(". ");
-    chapters.push({
-      id: "document-information",
-      label: "Document Information",
-      html: htmlFragment,
-      text,
-    });
+function formatTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return "0:00";
   }
-
-  Array.from(article.querySelectorAll(":scope > section")).forEach((section, index) => {
-    const text = getReadableText(section);
-    if (!text) {
-      return;
-    }
-
-    chapters.push({
-      id: section.id || `chapter-${index + 1}`,
-      label: getHeadingText(section, `Chapter ${index + 1}`),
-      html: getReadableHtml(section),
-      text,
-    });
-  });
-
-  if (chapters.length === 0) {
-    const text = getReadableText(article);
-    chapters.push({
-      id: "document",
-      label: "Document",
-      html: getReadableHtml(article),
-      text,
-    });
-  }
-
-  return chapters;
+  const wholeSeconds = Math.floor(seconds);
+  return `${Math.floor(wholeSeconds / 60)}:${String(wholeSeconds % 60).padStart(2, "0")}`;
 }
 
 export default function ResultPreview({
   result,
   onOpenFullPage,
   onReprocess,
+  onShowPdfSource,
+  isPdfSourceVisible,
 }: ResultPreviewProps) {
   const chapters = useMemo(() => parseChapters(result.previewHtml), [result.previewHtml]);
-  const [activeChapterId, setActiveChapterId] = useState(chapters[0]?.id ?? "");
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [status, setStatus] = useState("Ready for Microsoft Read Aloud.");
-  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioUrlRef = useRef<string | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
+  const [player, setPlayer] = useState<PlayerState>(DEFAULT_PLAYER_STATE);
+  const [activeChapterIndex, setActiveChapterIndex] = useState(0);
+  const activeChapter = chapters[activeChapterIndex] ?? chapters[0];
+  const isPlaying = player.status === "playing" || player.status === "loading";
 
-  const activeChapter = chapters.find((chapter) => chapter.id === activeChapterId) ?? chapters[0];
-
-  useEffect(() => {
-    setActiveChapterId(chapters[0]?.id ?? "");
-    stopReading("Ready for Microsoft Read Aloud.");
-    return () => {
-      stopReading("Ready for Microsoft Read Aloud.");
-    };
-  }, [chapters]);
-
-  function cleanupMicrosoftAudio() {
-    abortControllerRef.current?.abort();
-    abortControllerRef.current = null;
-    audioRef.current?.pause();
-    audioRef.current = null;
-    if (audioUrlRef.current) {
-      URL.revokeObjectURL(audioUrlRef.current);
-      audioUrlRef.current = null;
-    }
-  }
-
-  function stopReading(nextStatus = "Reading stopped.") {
-    cleanupMicrosoftAudio();
-    globalThis.speechSynthesis?.cancel();
-    utteranceRef.current = null;
-    setIsPlaying(false);
-    setStatus(nextStatus);
-  }
-
-  function readWithBrowserVoice(chapter: ReaderChapter) {
-    if (!globalThis.speechSynthesis || !globalThis.SpeechSynthesisUtterance) {
-      setStatus("Read aloud is unavailable in this browser.");
-      setIsPlaying(false);
-      return;
-    }
-
-    globalThis.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(chapter.text);
-    utterance.lang = document.documentElement.lang || "en";
-    utterance.onstart = () => {
-      setIsPlaying(true);
-      setStatus(`Using browser voice for ${chapter.label}.`);
-    };
-    utterance.onend = () => {
-      utteranceRef.current = null;
-      setIsPlaying(false);
-      setStatus("Ready for Microsoft Read Aloud.");
-    };
-    utterance.onerror = () => {
-      utteranceRef.current = null;
-      setIsPlaying(false);
-      setStatus("Read aloud stopped before finishing.");
-    };
-    utteranceRef.current = utterance;
-    globalThis.speechSynthesis.speak(utterance);
-  }
-
-  async function readChapter(chapter = activeChapter) {
-    if (!chapter?.text) {
-      setStatus("No readable text was found for this chapter.");
-      return;
-    }
-
-    stopReading(`Preparing Microsoft voice for ${chapter.label}.`);
-    setIsPlaying(true);
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-
+  async function sendPlayerCommand(command: PlayerCommand): Promise<void> {
     try {
-      const audioUrl = await synthesizeWithMicrosoftReadAloud(chapter.text, {
-        voiceName: "en-US-JennyNeural",
-        rate: "+0%",
-        signal: abortController.signal,
-      });
-      audioUrlRef.current = audioUrl;
-      const audio = new Audio(audioUrl);
-      audioRef.current = audio;
-      audio.onplay = () => {
-        setIsPlaying(true);
-        setStatus(`Microsoft voice is reading ${chapter.label}.`);
-      };
-      audio.onended = () => {
-        cleanupMicrosoftAudio();
-        setIsPlaying(false);
-        setStatus("Ready for Microsoft Read Aloud.");
-      };
-      audio.onerror = () => {
-        cleanupMicrosoftAudio();
-        setStatus("Microsoft voice stopped. Trying browser voice.");
-        readWithBrowserVoice(chapter);
-      };
-      await audio.play();
-    } catch (error) {
-      cleanupMicrosoftAudio();
-      if (error instanceof DOMException && error.name === "AbortError") {
-        setIsPlaying(false);
+      const response = await chrome.runtime.sendMessage(command) as BackgroundResponse | undefined;
+      if (response?.ok) {
         return;
       }
-      setStatus("Microsoft voice is unavailable. Trying browser voice.");
-      readWithBrowserVoice(chapter);
+      setPlayer((current) => ({
+        ...current,
+        status: "error",
+        statusMessage: response?.error ?? "The DocuSense player did not respond.",
+      }));
+    } catch (error) {
+      setPlayer((current) => ({
+        ...current,
+        status: "error",
+        statusMessage:
+          error instanceof Error ? error.message : "The DocuSense player did not respond.",
+      }));
     }
   }
 
-  function handleChapterSelect(chapter: ReaderChapter) {
-    setActiveChapterId(chapter.id);
-    if (isPlaying) {
-      void readChapter(chapter);
-      return;
-    }
-    setStatus(`Selected ${chapter.label}.`);
+  useEffect(() => {
+    let mounted = true;
+    readPlayerState().then((savedState) => {
+      if (mounted) {
+        setPlayer(savedState);
+        if (savedState.documentId === result.jobId) {
+          setActiveChapterIndex(savedState.currentIndex);
+        }
+      }
+    });
+    const unsubscribe = subscribeToPlayerChanges((nextPlayer) => {
+      setPlayer(nextPlayer);
+      if (nextPlayer.documentId === result.jobId) {
+        setActiveChapterIndex(nextPlayer.currentIndex);
+      }
+    });
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, [result.jobId]);
+
+  useEffect(() => {
+    setActiveChapterIndex(0);
+    void sendPlayerCommand({
+      type: "DOCUSENSE_PLAYER_LOAD",
+      documentId: result.jobId,
+      chapters,
+    });
+  }, [chapters, result.jobId]);
+
+  function selectChapter(index: number): void {
+    setActiveChapterIndex(index);
+    void sendPlayerCommand({
+      type: "DOCUSENSE_PLAYER_SELECT",
+      index,
+    });
+  }
+
+  function selectPreviousChapter(): void {
+    const previousIndex =
+      player.currentTime > 3
+        ? activeChapterIndex
+        : Math.max(activeChapterIndex - 1, 0);
+    setActiveChapterIndex(previousIndex);
+    void sendPlayerCommand({ type: "DOCUSENSE_PLAYER_PREVIOUS" });
+  }
+
+  function selectNextChapter(): void {
+    const nextIndex = Math.min(activeChapterIndex + 1, chapters.length - 1);
+    setActiveChapterIndex(nextIndex);
+    void sendPlayerCommand({ type: "DOCUSENSE_PLAYER_NEXT" });
   }
 
   return (
@@ -235,6 +122,9 @@ export default function ResultPreview({
           <p>{result.pageCount} pages processed</p>
         </div>
         <div className="result-actions">
+          <button type="button" className="source-button" onClick={onShowPdfSource}>
+            {isPdfSourceVisible ? "Hide Source" : "PDF Source"}
+          </button>
           <button type="button" className="secondary-button compact" onClick={onOpenFullPage}>
             Open HTML
           </button>
@@ -245,40 +135,81 @@ export default function ResultPreview({
           ) : null}
         </div>
       </div>
-      {result.cached ? (
-        <p className="cache-note">
-          This URL has already been processed. DocuSense is showing the saved document.
-        </p>
-      ) : null}
+      <div className="audio-player" aria-label="Document audio player">
+        <div className="now-playing">
+          <span>Now reading</span>
+          <strong>{activeChapter?.label ?? "Document"}</strong>
+        </div>
 
-      <div className="reader-controls" aria-label="Read aloud controls">
-        <button
-          type="button"
-          className="primary-button compact"
-          onClick={() => void readChapter()}
-          disabled={isPlaying}
-        >
-          Microsoft Voice
-        </button>
-        <button
-          type="button"
-          className="secondary-button compact"
-          onClick={() => stopReading()}
-          disabled={!isPlaying}
-        >
-          Stop
-        </button>
-        <p aria-live="polite">{status}</p>
+        <div className="transport-controls">
+          <button
+            type="button"
+            className="transport-button"
+            aria-label="Previous section"
+            title="Previous section"
+            disabled={activeChapterIndex <= 0 && player.currentTime <= 3}
+            onClick={selectPreviousChapter}
+          >
+            |&lt;
+          </button>
+          <button
+            type="button"
+            className="play-button"
+            aria-label={isPlaying ? "Pause" : "Play"}
+            disabled={chapters.length === 0}
+            onClick={() =>
+              void sendPlayerCommand({
+                type: isPlaying ? "DOCUSENSE_PLAYER_PAUSE" : "DOCUSENSE_PLAYER_PLAY",
+              })
+            }
+          >
+            {player.status === "loading" ? "..." : isPlaying ? "Pause" : "Play"}
+          </button>
+          <button
+            type="button"
+            className="transport-button"
+            aria-label="Next section"
+            title="Next section"
+            disabled={activeChapterIndex >= chapters.length - 1}
+            onClick={selectNextChapter}
+          >
+            &gt;|
+          </button>
+        </div>
+
+        <div className="progress-row">
+          <span>{formatTime(player.currentTime)}</span>
+          <input
+            type="range"
+            min="0"
+            max={Math.max(player.duration, 1)}
+            step="0.1"
+            value={Math.min(player.currentTime, Math.max(player.duration, 1))}
+            aria-label="Playback position"
+            disabled={player.duration <= 0}
+            onChange={(event) =>
+              void sendPlayerCommand({
+                type: "DOCUSENSE_PLAYER_SEEK",
+                time: Number(event.currentTarget.value),
+              })
+            }
+          />
+          <span>{formatTime(player.duration)}</span>
+        </div>
+        <p className={`player-status status-${player.status}`} aria-live="polite">
+          {player.statusMessage}
+        </p>
       </div>
 
       <div className="reader-layout">
-        <nav className="chapter-list" aria-label="Document chapters">
-          {chapters.map((chapter) => (
+        <nav className="chapter-list" aria-label="Document sections">
+          {chapters.map((chapter, index) => (
             <button
               type="button"
               key={chapter.id}
-              className={chapter.id === activeChapter?.id ? "active" : ""}
-              onClick={() => handleChapterSelect(chapter)}
+              className={index === activeChapterIndex ? "active" : ""}
+              aria-current={index === activeChapterIndex ? "true" : undefined}
+              onClick={() => selectChapter(index)}
             >
               {chapter.label}
             </button>

@@ -11,7 +11,7 @@
     "service_worker": "background.js",
     "type": "module"
   },
-  "permissions": ["activeTab", "tabs", "scripting", "storage"],
+  "permissions": ["activeTab", "tabs", "scripting", "storage", "offscreen"],
   "host_permissions": [
     "http://localhost:8000/*",
     "https://speech.platform.bing.com/*",

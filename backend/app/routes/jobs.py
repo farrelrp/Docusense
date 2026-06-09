@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from app.config import Settings, get_settings
-from app.models import CompletedJobResponse, UrlJobRequest, WarningResponse
+from app.models import CacheMissResponse, CompletedJobResponse, UrlJobRequest, WarningResponse
 from app.services.errors import DocuSenseError
 from app.services.gemini_processor import GeminiDocumentProcessor
 from app.services.html_sanitizer import extract_metadata, sanitize_html
@@ -38,24 +38,6 @@ async def create_job_from_url(
     settings: Settings = Depends(get_settings),
 ):
     url = str(request.url)
-    store = ResultStore(settings)
-    if not request.force:
-        cached_job_id = store.get_cached_url_job_id(url)
-        if cached_job_id:
-            metadata = store.get_metadata(cached_job_id)
-            logger.info(
-                "[docusense] job=%s status=cache_hit source=url url=%s",
-                cached_job_id,
-                url,
-            )
-            return CompletedJobResponse(
-                job_id=cached_job_id,
-                page_count=metadata["page_count"],
-                result_url=f"{settings.backend_base_url.rstrip('/')}/api/results/{cached_job_id}",
-                preview_html=build_preview_html(store.get_html(cached_job_id)),
-                cached=True,
-            )
-
     pdf_path = await download_pdf(url, settings)
     return await _process_pdf(
         pdf_path,
@@ -64,6 +46,30 @@ async def create_job_from_url(
         source_type="url",
         source_url=url,
     )
+
+
+@router.post("/cache/upload", response_model=Union[CompletedJobResponse, CacheMissResponse])
+async def get_cached_job_from_upload(
+    file: UploadFile = File(...),
+    settings: Settings = Depends(get_settings),
+):
+    pdf_path = await save_upload(file, settings)
+    try:
+        return _get_cached_response(pdf_path, settings) or CacheMissResponse()
+    finally:
+        pdf_path.unlink(missing_ok=True)
+
+
+@router.post("/cache/url", response_model=Union[CompletedJobResponse, CacheMissResponse])
+async def get_cached_job_from_url(
+    request: UrlJobRequest,
+    settings: Settings = Depends(get_settings),
+):
+    pdf_path = await download_pdf(str(request.url), settings)
+    try:
+        return _get_cached_response(pdf_path, settings) or CacheMissResponse()
+    finally:
+        pdf_path.unlink(missing_ok=True)
 
 
 async def _process_pdf(
@@ -78,24 +84,17 @@ async def _process_pdf(
     store = ResultStore(settings)
     try:
         if not force:
-            cached_job_id = store.get_cached_content_job_id(content_hash)
-            if cached_job_id:
-                metadata = store.get_metadata(cached_job_id)
+            cached_response = _get_cached_response(pdf_path, settings, content_hash)
+            if cached_response:
                 logger.info(
                     "[docusense] job=%s status=cache_hit source=%s cache=content content_hash=%s",
-                    cached_job_id,
+                    cached_response.job_id,
                     source_type,
                     content_hash,
                 )
                 if source_url:
-                    store.save_url_cache_entry(source_url, cached_job_id)
-                return CompletedJobResponse(
-                    job_id=cached_job_id,
-                    page_count=metadata["page_count"],
-                    result_url=f"{settings.backend_base_url.rstrip('/')}/api/results/{cached_job_id}",
-                    preview_html=build_preview_html(store.get_html(cached_job_id)),
-                    cached=True,
-                )
+                    store.save_url_cache_entry(source_url, cached_response.job_id)
+                return cached_response
 
         page_count = count_pages(pdf_path)
         logger.info(
@@ -208,6 +207,26 @@ async def _process_pdf(
         )
     finally:
         pdf_path.unlink(missing_ok=True)
+
+
+def _get_cached_response(
+    pdf_path: Path,
+    settings: Settings,
+    content_hash: Optional[str] = None,
+) -> Optional[CompletedJobResponse]:
+    store = ResultStore(settings)
+    cached_job_id = store.get_cached_content_job_id(content_hash or hash_file(pdf_path))
+    if not cached_job_id:
+        return None
+
+    metadata = store.get_metadata(cached_job_id)
+    return CompletedJobResponse(
+        job_id=cached_job_id,
+        page_count=metadata["page_count"],
+        result_url=f"{settings.backend_base_url.rstrip('/')}/api/results/{cached_job_id}",
+        preview_html=build_preview_html(store.get_html(cached_job_id)),
+        cached=True,
+    )
 
 
 def build_preview_html(html: str) -> str:

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   JobState,
@@ -52,16 +52,31 @@ function getFilenameFromUrl(url: string, fallback: string): string {
 
 export default function App() {
   const [tabInfo, setTabInfo] = useState<TabInfo>({ url: "", title: "" });
-  const [session, setSession] = useState<PersistedSession>(DEFAULT_SESSION);
+  const [tabLoaded, setTabLoaded] = useState(false);
+  const [sessionLoaded, setSessionLoaded] = useState(false);
+  const [session, setSession] = useState<PersistedSession>({
+    ...DEFAULT_SESSION,
+    updatedAt: 0,
+  });
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
+  const [selectedSourceKey, setSelectedSourceKey] = useState("");
+  const [showPdfSource, setShowPdfSource] = useState(true);
+  const checkedSourceRef = useRef("");
 
   const isPdfTab = useMemo(() => looksLikePdfUrl(tabInfo.url), [tabInfo.url]);
   const isFileTab = tabInfo.url.toLowerCase().startsWith("file://");
-  const { state, statusMessage, errorMessage, result, warning } = session;
+  const tabSourceKey = isPdfTab ? `url:${tabInfo.url}` : "";
+  const activeSourceKey = selectedSourceKey || tabSourceKey;
+  const visibleSession =
+    activeSourceKey && session.sourceKey === activeSourceKey
+      ? session
+      : { ...DEFAULT_SESSION, sourceKey: activeSourceKey };
+  const { state, statusMessage, errorMessage, result, warning } = visibleSession;
 
   useEffect(() => {
     const chromeApi = globalThis.chrome;
     if (!chromeApi?.tabs?.query) {
+      setTabLoaded(true);
       return;
     }
 
@@ -71,30 +86,82 @@ export default function App() {
         url: current?.url ?? "",
         title: current?.title ?? "",
       });
+      setTabLoaded(true);
     });
   }, []);
 
   useEffect(() => {
     let isMounted = true;
+    const applySession = (nextSession: PersistedSession) => {
+      if (!isMounted) {
+        return;
+      }
+      setSession((current) =>
+        nextSession.updatedAt >= current.updatedAt ? nextSession : current,
+      );
+    };
 
     readSession()
       .then((savedSession) => {
-        if (isMounted) {
-          setSession(savedSession);
-        }
+        applySession(savedSession);
       })
       .catch(() => {
+        applySession(DEFAULT_SESSION);
+      })
+      .finally(() => {
         if (isMounted) {
-          setSession(DEFAULT_SESSION);
+          setSessionLoaded(true);
         }
       });
 
-    const unsubscribe = subscribeToSessionChanges(setSession);
+    const unsubscribe = subscribeToSessionChanges(applySession);
     return () => {
       isMounted = false;
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (!tabLoaded || !sessionLoaded || !isPdfTab || !tabSourceKey) {
+      return;
+    }
+    if (
+      session.sourceKey === tabSourceKey &&
+      ["uploading", "processing", "warning"].includes(session.state)
+    ) {
+      return;
+    }
+    if (checkedSourceRef.current === tabSourceKey) {
+      return;
+    }
+    checkedSourceRef.current = tabSourceKey;
+    setSelectedSourceKey("");
+
+    if (isFileTab) {
+      void checkCurrentFileCache(tabInfo.url, tabSourceKey);
+      return;
+    }
+    void sendBackgroundRequest({
+      type: "DOCUSENSE_CHECK_URL",
+      url: tabInfo.url,
+      sourceKey: tabSourceKey,
+    });
+  }, [
+    isFileTab,
+    isPdfTab,
+    session.state,
+    session.sourceKey,
+    sessionLoaded,
+    tabInfo.url,
+    tabLoaded,
+    tabSourceKey,
+  ]);
+
+  useEffect(() => {
+    if (result) {
+      setShowPdfSource(false);
+    }
+  }, [result?.jobId]);
 
   async function sendBackgroundRequest(request: BackgroundRequest): Promise<boolean> {
     const chromeApi = globalThis.chrome;
@@ -110,28 +177,49 @@ export default function App() {
     throw new Error(response?.error ?? "DocuSense could not start background processing.");
   }
 
-  async function startUploadInBackground(file: File, force = false): Promise<boolean> {
+  async function sendFileRequest(
+    type: "DOCUSENSE_START_UPLOAD" | "DOCUSENSE_CHECK_UPLOAD",
+    file: File,
+    sourceKey: string,
+    force = false,
+  ): Promise<boolean> {
     const buffer = await file.arrayBuffer();
     return sendBackgroundRequest({
-      type: "DOCUSENSE_START_UPLOAD",
+      type,
       fileName: file.name,
       mimeType: file.type,
       bytes: Array.from(new Uint8Array(buffer)),
-      force,
+      sourceKey,
+      ...(type === "DOCUSENSE_START_UPLOAD" ? { force } : {}),
     });
   }
 
-  async function runPendingAction(action: PendingAction, force = false) {
+  async function runPendingAction(
+    action: PendingAction,
+    force = false,
+    sourceKeyOverride = "",
+  ) {
     if (!action) {
       return;
     }
 
     setPendingAction(action);
+    const sourceKey =
+      sourceKeyOverride ||
+      (action.type === "upload"
+        ? selectedSourceKey || `upload:${action.file.name}:${action.file.size}:${action.file.lastModified}`
+        : `url:${action.url}`);
+    setSelectedSourceKey(sourceKey);
 
     const startedInBackground =
       action.type === "upload"
-        ? await startUploadInBackground(action.file, force)
-        : await sendBackgroundRequest({ type: "DOCUSENSE_START_URL", url: action.url, force });
+        ? await sendFileRequest("DOCUSENSE_START_UPLOAD", action.file, sourceKey, force)
+        : await sendBackgroundRequest({
+            type: "DOCUSENSE_START_URL",
+            url: action.url,
+            sourceKey,
+            force,
+          });
 
     if (startedInBackground) {
       return;
@@ -139,6 +227,7 @@ export default function App() {
 
     await writeSession({
       ...DEFAULT_SESSION,
+      sourceKey,
       state: action.type === "upload" ? "uploading" : "checking",
       statusMessage: action.type === "upload" ? "Uploading PDF..." : "Checking PDF URL...",
       startedAt: Date.now(),
@@ -147,6 +236,7 @@ export default function App() {
     try {
       await writeSession({
         ...DEFAULT_SESSION,
+        sourceKey,
         state: "processing",
         statusMessage: "Processing with DocuSense. This may take a minute.",
         startedAt: Date.now(),
@@ -159,6 +249,7 @@ export default function App() {
       if (isWarningResult(response)) {
         await writeSession({
           ...DEFAULT_SESSION,
+          sourceKey,
           state: "warning",
           statusMessage: response.message,
           warning: response,
@@ -168,15 +259,17 @@ export default function App() {
 
       await writeSession({
         ...DEFAULT_SESSION,
+        sourceKey,
         state: "completed",
         statusMessage: response.cached
-          ? `This URL was already processed. Showing the saved document for ${response.pageCount} pages.`
+          ? `This PDF was already processed. Showing the saved document for ${response.pageCount} pages.`
           : `Completed. Processed ${response.pageCount} pages.`,
         result: response,
       });
     } catch (error) {
       await writeSession({
         ...DEFAULT_SESSION,
+        sourceKey,
         state: "error",
         errorMessage: error instanceof Error ? error.message : "DocuSense hit an unknown error.",
         statusMessage: "Processing failed.",
@@ -184,7 +277,8 @@ export default function App() {
     }
   }
 
-  function handleProcessCurrentPdf() {
+  async function handleProcessCurrentPdf(force = false) {
+    setSelectedSourceKey("");
     if (!tabInfo.url) {
       void writeSession({
         ...DEFAULT_SESSION,
@@ -195,33 +289,49 @@ export default function App() {
       return;
     }
     if (isFileTab) {
-      processCurrentFileTab(tabInfo.url);
+      processCurrentFileTab(tabInfo.url, force);
       return;
     }
-    runPendingAction({ type: "url", url: tabInfo.url });
+    runPendingAction({ type: "url", url: tabInfo.url }, force, tabSourceKey);
   }
 
-  async function processCurrentFileTab(url: string) {
+  async function getCurrentFile(url: string): Promise<File> {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`The PDF could not be read from the current tab (${response.status}).`);
+    }
+    const blob = await response.blob();
+    const filename = getFilenameFromUrl(url, "current-tab.pdf");
+    return new File([blob], filename, { type: blob.type || "application/pdf" });
+  }
+
+  async function checkCurrentFileCache(url: string, sourceKey: string) {
+    try {
+      const file = await getCurrentFile(url);
+      await sendFileRequest("DOCUSENSE_CHECK_UPLOAD", file, sourceKey);
+    } catch {
+      // File URL access can be disabled; the normal process action reports that explicitly.
+    }
+  }
+
+  async function processCurrentFileTab(url: string, force = false) {
+    const sourceKey = `url:${url}`;
     await writeSession({
       ...DEFAULT_SESSION,
+      sourceKey,
       state: "uploading",
       statusMessage: "Reading the current PDF tab...",
       startedAt: Date.now(),
     });
 
     try {
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`The PDF could not be read from the current tab (${response.status}).`);
-      }
-
-      const blob = await response.blob();
-      const filename = getFilenameFromUrl(url, "current-tab.pdf");
-      const file = new File([blob], filename, { type: blob.type || "application/pdf" });
-      await runPendingAction({ type: "upload", file });
+      const file = await getCurrentFile(url);
+      setSelectedSourceKey(sourceKey);
+      await runPendingAction({ type: "upload", file }, force, sourceKey);
     } catch (error) {
       await writeSession({
         ...DEFAULT_SESSION,
+        sourceKey,
         state: "error",
         statusMessage: "Processing failed.",
         errorMessage: error instanceof Error
@@ -232,7 +342,9 @@ export default function App() {
   }
 
   function handleUpload(file: File) {
-    runPendingAction({ type: "upload", file });
+    const sourceKey = `upload:${file.name}:${file.size}:${file.lastModified}`;
+    setSelectedSourceKey(sourceKey);
+    runPendingAction({ type: "upload", file }, false, sourceKey);
   }
 
   function handleContinue() {
@@ -245,7 +357,11 @@ export default function App() {
   }
 
   function handleReprocess() {
-    runPendingAction(pendingAction, true);
+    if (pendingAction) {
+      runPendingAction(pendingAction, true);
+      return;
+    }
+    void handleProcessCurrentPdf(true);
   }
 
   function handleOpenFullPage() {
@@ -264,24 +380,31 @@ export default function App() {
   return (
     <main className="app-shell">
       <Header />
-      <PdfInputPanel
-        currentUrl={tabInfo.url}
-        currentTitle={tabInfo.title}
-        isPdfTab={isPdfTab}
-        isFileTab={isFileTab}
-        disabled={state === "uploading" || state === "checking" || state === "processing"}
-        onProcessCurrentPdf={handleProcessCurrentPdf}
-        onUpload={handleUpload}
-      />
-
-      <ProgressView state={state} message={statusMessage} errorMessage={errorMessage} />
 
       {result ? (
         <ResultPreview
           result={result}
           onOpenFullPage={handleOpenFullPage}
           onReprocess={handleReprocess}
+          onShowPdfSource={() => setShowPdfSource((current) => !current)}
+          isPdfSourceVisible={showPdfSource}
         />
+      ) : null}
+
+      {!result || showPdfSource ? (
+        <PdfInputPanel
+          currentUrl={tabInfo.url}
+          currentTitle={tabInfo.title}
+          isPdfTab={isPdfTab}
+          isFileTab={isFileTab}
+          disabled={state === "uploading" || state === "checking" || state === "processing"}
+          onProcessCurrentPdf={() => void handleProcessCurrentPdf()}
+          onUpload={handleUpload}
+        />
+      ) : null}
+
+      {!result ? (
+        <ProgressView state={state} message={statusMessage} errorMessage={errorMessage} />
       ) : null}
 
       {warning ? (
