@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ProcessingResult } from "../api";
+import { synthesizeWithMicrosoftReadAloud } from "../microsoftReadAloud";
 
 interface ResultPreviewProps {
   result: ProcessingResult;
@@ -108,33 +109,45 @@ export default function ResultPreview({
   const chapters = useMemo(() => parseChapters(result.previewHtml), [result.previewHtml]);
   const [activeChapterId, setActiveChapterId] = useState(chapters[0]?.id ?? "");
   const [isPlaying, setIsPlaying] = useState(false);
-  const [status, setStatus] = useState("Ready to read.");
+  const [status, setStatus] = useState("Ready for Microsoft Read Aloud.");
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const activeChapter = chapters.find((chapter) => chapter.id === activeChapterId) ?? chapters[0];
 
   useEffect(() => {
     setActiveChapterId(chapters[0]?.id ?? "");
-    stopReading("Ready to read.");
+    stopReading("Ready for Microsoft Read Aloud.");
     return () => {
-      globalThis.speechSynthesis?.cancel();
+      stopReading("Ready for Microsoft Read Aloud.");
     };
   }, [chapters]);
 
+  function cleanupMicrosoftAudio() {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    audioRef.current?.pause();
+    audioRef.current = null;
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+  }
+
   function stopReading(nextStatus = "Reading stopped.") {
+    cleanupMicrosoftAudio();
     globalThis.speechSynthesis?.cancel();
     utteranceRef.current = null;
     setIsPlaying(false);
     setStatus(nextStatus);
   }
 
-  function readChapter(chapter = activeChapter) {
-    if (!chapter?.text) {
-      setStatus("No readable text was found for this chapter.");
-      return;
-    }
+  function readWithBrowserVoice(chapter: ReaderChapter) {
     if (!globalThis.speechSynthesis || !globalThis.SpeechSynthesisUtterance) {
-      setStatus("This browser does not support read aloud controls.");
+      setStatus("Read aloud is unavailable in this browser.");
+      setIsPlaying(false);
       return;
     }
 
@@ -143,12 +156,12 @@ export default function ResultPreview({
     utterance.lang = document.documentElement.lang || "en";
     utterance.onstart = () => {
       setIsPlaying(true);
-      setStatus(`Reading ${chapter.label}.`);
+      setStatus(`Using browser voice for ${chapter.label}.`);
     };
     utterance.onend = () => {
       utteranceRef.current = null;
       setIsPlaying(false);
-      setStatus("Ready to read.");
+      setStatus("Ready for Microsoft Read Aloud.");
     };
     utterance.onerror = () => {
       utteranceRef.current = null;
@@ -159,10 +172,56 @@ export default function ResultPreview({
     globalThis.speechSynthesis.speak(utterance);
   }
 
+  async function readChapter(chapter = activeChapter) {
+    if (!chapter?.text) {
+      setStatus("No readable text was found for this chapter.");
+      return;
+    }
+
+    stopReading(`Preparing Microsoft voice for ${chapter.label}.`);
+    setIsPlaying(true);
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    try {
+      const audioUrl = await synthesizeWithMicrosoftReadAloud(chapter.text, {
+        voiceName: "en-US-JennyNeural",
+        rate: "+0%",
+        signal: abortController.signal,
+      });
+      audioUrlRef.current = audioUrl;
+      const audio = new Audio(audioUrl);
+      audioRef.current = audio;
+      audio.onplay = () => {
+        setIsPlaying(true);
+        setStatus(`Microsoft voice is reading ${chapter.label}.`);
+      };
+      audio.onended = () => {
+        cleanupMicrosoftAudio();
+        setIsPlaying(false);
+        setStatus("Ready for Microsoft Read Aloud.");
+      };
+      audio.onerror = () => {
+        cleanupMicrosoftAudio();
+        setStatus("Microsoft voice stopped. Trying browser voice.");
+        readWithBrowserVoice(chapter);
+      };
+      await audio.play();
+    } catch (error) {
+      cleanupMicrosoftAudio();
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setIsPlaying(false);
+        return;
+      }
+      setStatus("Microsoft voice is unavailable. Trying browser voice.");
+      readWithBrowserVoice(chapter);
+    }
+  }
+
   function handleChapterSelect(chapter: ReaderChapter) {
     setActiveChapterId(chapter.id);
     if (isPlaying) {
-      readChapter(chapter);
+      void readChapter(chapter);
       return;
     }
     setStatus(`Selected ${chapter.label}.`);
@@ -196,10 +255,10 @@ export default function ResultPreview({
         <button
           type="button"
           className="primary-button compact"
-          onClick={() => readChapter()}
+          onClick={() => void readChapter()}
           disabled={isPlaying}
         >
-          Play
+          Microsoft Voice
         </button>
         <button
           type="button"

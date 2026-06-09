@@ -35,8 +35,8 @@ export function normalizeSession(value: unknown): PersistedSession {
 
 export async function readSession(): Promise<PersistedSession> {
   const chromeApi = globalThis.chrome;
-  if (chromeApi?.storage?.session) {
-    const data = await chromeApi.storage.session.get(SESSION_STORAGE_KEY);
+  if (chromeApi?.storage?.local) {
+    const data = await chromeApi.storage.local.get(SESSION_STORAGE_KEY);
     return normalizeSession(data[SESSION_STORAGE_KEY]);
   }
 
@@ -51,8 +51,8 @@ export async function writeSession(session: PersistedSession): Promise<void> {
   };
 
   const chromeApi = globalThis.chrome;
-  if (chromeApi?.storage?.session) {
-    await chromeApi.storage.session.set({ [SESSION_STORAGE_KEY]: value });
+  if (chromeApi?.storage?.local) {
+    await chromeApi.storage.local.set({ [SESSION_STORAGE_KEY]: value });
     return;
   }
 
@@ -71,7 +71,7 @@ export function subscribeToSessionChanges(
     changes: Record<string, chrome.storage.StorageChange>,
     areaName: string,
   ) => {
-    if (areaName !== "session" || !changes[SESSION_STORAGE_KEY]) {
+    if (areaName !== "local" || !changes[SESSION_STORAGE_KEY]) {
       return;
     }
 

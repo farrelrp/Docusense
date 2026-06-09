@@ -173,6 +173,7 @@ input:focus-visible,
 }
 
 .primary-button:disabled,
+.secondary-button:disabled,
 .file-control:has(input:disabled) {
   cursor: not-allowed;
   opacity: 0.55;
@@ -250,6 +251,7 @@ input:focus-visible,
 .reader-controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 12px;
   border: 1px solid var(--docusense-border);
@@ -259,6 +261,7 @@ input:focus-visible,
 }
 
 .reader-controls p {
+  flex: 1 1 160px;
   min-width: 0;
   margin: 0;
   color: #43516a;

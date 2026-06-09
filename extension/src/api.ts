@@ -1,4 +1,5 @@
 const API_BASE_URL = "http://localhost:8000";
+const MAX_PREVIEW_HTML_CHARS = 200_000;
 
 export type JobState =
   | "idle"
@@ -84,7 +85,16 @@ async function parseJobResponse(response: Response): Promise<JobApiResult> {
     jobId: data.job_id,
     pageCount: data.page_count,
     resultUrl: data.result_url,
-    previewHtml: data.preview_html,
+    previewHtml: compactPreviewHtml(data.preview_html),
     cached: Boolean(data.cached),
   };
+}
+
+function compactPreviewHtml(html: string): string {
+  if (html.length <= MAX_PREVIEW_HTML_CHARS) {
+    return html;
+  }
+
+  return `${html.slice(0, MAX_PREVIEW_HTML_CHARS)}
+<p>Open the full HTML result to read the complete processed document.</p>`;
 }

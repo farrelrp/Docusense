@@ -398,6 +398,8 @@ def enhance_readable_result_page(html: str) -> str:
             article.append(child.extract())
         main.append(article)
 
+    ensure_document_information(soup)
+
     if soup.head.find("style", id="docuse-reader-style") is None:
         style = soup.new_tag("style", id="docuse-reader-style")
         style.string = READER_PLAYER_CSS
@@ -413,6 +415,74 @@ def enhance_readable_result_page(html: str) -> str:
         soup.body.append(script)
 
     return "<!doctype html>\n" + str(soup)
+
+
+def ensure_document_information(soup: BeautifulSoup) -> None:
+    article = soup.select_one("main article") or soup.find("article")
+    if article is None:
+        return
+
+    for section in list(article.find_all("section")):
+        heading = section.find(["h1", "h2", "h3", "h4"])
+        if section.get("id") == "document-information" or (
+            heading and heading.get_text(" ", strip=True).lower() == "document information"
+        ):
+            section.decompose()
+
+    title = extract_title(str(article)) or "Untitled document"
+    authors = extract_authors(article, title)
+    publisher = extract_publisher(article)
+
+    details = [f'This document is titled "{title}".']
+    if authors:
+        details.append(f"It was authored by {authors}.")
+    if publisher:
+        details.append(f"It was published by {publisher}.")
+
+    section = soup.new_tag("section", id="document-information")
+    heading = soup.new_tag("h2")
+    heading.string = "Document Information"
+    paragraph = soup.new_tag("p")
+    paragraph.string = " ".join(details)
+    section.append(heading)
+    section.append(paragraph)
+    article.insert(0, section)
+
+
+def extract_authors(article, title: str) -> str:
+    for node in article.find_all(["p", "div", "header"], recursive=True):
+        text = clean_metadata_text(node.get_text(" ", strip=True))
+        if not text or text == title or "@" in text:
+            continue
+        if re.search(r"\b(publisher|detected language|arxiv|preprint|abstract)\b", text, re.I):
+            continue
+        if "," in text and len(re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", text)) >= 2:
+            return text.rstrip(".")
+    return ""
+
+
+def extract_publisher(article) -> str:
+    raw_text = article.get_text("\n", strip=True)
+    text = clean_metadata_text(raw_text)
+    publisher_match = re.search(
+        r"\bPublisher:\s*(.+?)(?:\s+Detected Language:|\s+arXiv\b|\s+Preprint:|\n|$)",
+        text,
+        re.I,
+    )
+    if publisher_match:
+        return clean_metadata_text(publisher_match.group(1)).rstrip(".")
+
+    for line in raw_text.splitlines():
+        clean_line = clean_metadata_text(line)
+        if not clean_line or "@" in clean_line:
+            continue
+        if re.search(r"\b(research|university|institute|laboratory|lab|conference|journal)\b", clean_line, re.I):
+            return clean_line.rstrip(".")
+    return ""
+
+
+def clean_metadata_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def build_result_page(body_content: str, language: str) -> str:

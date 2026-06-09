@@ -12,5 +12,12 @@
     "type": "module"
   },
   "permissions": ["activeTab", "tabs", "scripting", "storage"],
-  "host_permissions": ["http://localhost:8000/*", "https://*/*", "http://*/*", "file:///*"]
+  "host_permissions": [
+    "http://localhost:8000/*",
+    "https://speech.platform.bing.com/*",
+    "wss://speech.platform.bing.com/*",
+    "https://*/*",
+    "http://*/*",
+    "file:///*"
+  ]
 }
