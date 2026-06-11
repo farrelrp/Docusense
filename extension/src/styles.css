@@ -75,6 +75,13 @@ input:focus-visible,
   line-height: 1.35;
 }
 
+.shortcut-hint {
+  margin: 0;
+  color: #5d6b82;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .panel,
 .status {
   border: 1px solid var(--docusense-border);

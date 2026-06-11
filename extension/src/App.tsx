@@ -16,6 +16,7 @@ import {
   writeSession,
 } from "./sessionStore";
 import Header from "./components/Header";
+import KeyboardShortcut from "./components/KeyboardShortcut";
 import PdfInputPanel from "./components/PdfInputPanel";
 import ProgressView from "./components/ProgressView";
 import ResultPreview from "./components/ResultPreview";
@@ -394,6 +395,7 @@ export default function App() {
   return (
     <main className="app-shell">
       <Header />
+      <KeyboardShortcut onProcessCurrentPdf={() => void handleProcessCurrentPdf()} />
 
       {result ? (
         <ResultPreview

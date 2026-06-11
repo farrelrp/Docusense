@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ProcessingResult } from "../api";
 import { BackgroundResponse, PlayerCommand } from "../messages";
@@ -44,7 +44,7 @@ export default function ResultPreview({
     player.status !== "error";
   const isPlaying = player.status === "playing" || player.status === "loading";
 
-  async function sendPlayerCommand(command: PlayerCommand): Promise<boolean> {
+  const sendPlayerCommand = useCallback(async (command: PlayerCommand): Promise<boolean> => {
     try {
       const response = await chrome.runtime.sendMessage(command) as BackgroundResponse | undefined;
       if (response?.ok) {
@@ -65,7 +65,7 @@ export default function ResultPreview({
       }));
       return false;
     }
-  }
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -93,7 +93,8 @@ export default function ResultPreview({
     setActiveChapterIndex(0);
   }, [chapters, result.jobId]);
 
-  async function generateReadAloud(): Promise<void> {
+
+  const generateReadAloud = useCallback(async (): Promise<void> => {
     const selectedIndex = activeChapterIndex;
     setIsGenerating(true);
     try {
@@ -118,7 +119,42 @@ export default function ResultPreview({
     } finally {
       setIsGenerating(false);
     }
-  }
+  }, [activeChapterIndex, chapters, result.jobId, sendPlayerCommand]);
+
+  const togglePlayback = useCallback(async (): Promise<void> => {
+    if (!isReadAloudReady) {
+      await generateReadAloud();
+      return;
+    }
+
+    await sendPlayerCommand({
+      type: isPlaying ? "DOCUSENSE_PLAYER_PAUSE" : "DOCUSENSE_PLAYER_PLAY",
+    });
+  }, [generateReadAloud, isPlaying, isReadAloudReady, sendPlayerCommand]);
+
+  useEffect(() => {
+    const handleGenerateShortcut = () => {
+      void generateReadAloud();
+    };
+
+    const handleStartShortcut = () => {
+      void togglePlayback();
+    };
+
+    const handleTogglePlayShortcut = () => {
+      void togglePlayback();
+    };
+
+    window.addEventListener("docusense:generate-read-aloud", handleGenerateShortcut);
+    window.addEventListener("docusense:start-read-aloud", handleStartShortcut);
+    window.addEventListener("docusense:toggle-play", handleTogglePlayShortcut);
+
+    return () => {
+      window.removeEventListener("docusense:generate-read-aloud", handleGenerateShortcut);
+      window.removeEventListener("docusense:start-read-aloud", handleStartShortcut);
+      window.removeEventListener("docusense:toggle-play", handleTogglePlayShortcut);
+    };
+  }, [generateReadAloud, togglePlayback]);
 
   function selectChapter(index: number): void {
     setActiveChapterIndex(index);
@@ -189,11 +225,7 @@ export default function ResultPreview({
               className="play-button"
               aria-label={isPlaying ? "Pause" : "Play"}
               disabled={chapters.length === 0}
-              onClick={() =>
-                void sendPlayerCommand({
-                  type: isPlaying ? "DOCUSENSE_PLAYER_PAUSE" : "DOCUSENSE_PLAYER_PLAY",
-                })
-              }
+              onClick={() => void togglePlayback()}
             >
               {player.status === "loading" ? "..." : isPlaying ? "Pause" : "Play"}
             </button>
